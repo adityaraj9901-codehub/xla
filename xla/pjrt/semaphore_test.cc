@@ -18,7 +18,9 @@ limitations under the License.
 #include <gtest/gtest.h>
 
 #include <utility>
+#include <vector>
 
+#include "absl/synchronization/mutex.h"
 #include "absl/synchronization/notification.h"
 #include "tsl/platform/env.h"
 #include "tsl/platform/threadpool.h"
@@ -122,6 +124,46 @@ TEST(SemaphoreTest, ScopedReservationMoveAssignment) {
     EXPECT_EQ(r3.amount(), 4);
   }
   EXPECT_EQ(sem.value(), 10);
+}
+
+TEST(SemaphoreTest, FifoOrdering) {
+  constexpr int kNumWaiters = 8;
+  tsl::thread::ThreadPool pool(tsl::Env::Default(), "fifo_test", kNumWaiters);
+  Semaphore semaphore(1);
+  semaphore.Acquire(1);
+
+  absl::Mutex order_mu;
+  std::vector<int> acquired_order;
+  std::vector<absl::Notification> entered(kNumWaiters);
+  std::vector<absl::Notification> done(kNumWaiters);
+
+  for (int i = 0; i < kNumWaiters; ++i) {
+    pool.Schedule([&, i]() {
+      entered[i].Notify();
+      semaphore.Acquire(1);
+      {
+        absl::MutexLock lock(order_mu);
+        acquired_order.push_back(i);
+      }
+      semaphore.Release(1);
+      done[i].Notify();
+    });
+    entered[i].WaitForNotification();
+    // Give thread `i` time to block inside `Semaphore::Acquire(1)` before
+    // scheduling thread `i + 1`.
+    tsl::Env::Default()->SleepForMicroseconds(10000);
+  }
+
+  semaphore.Release(1);
+  for (int i = 0; i < kNumWaiters; ++i) {
+    done[i].WaitForNotification();
+  }
+
+  std::vector<int> expected_order(kNumWaiters);
+  for (int i = 0; i < kNumWaiters; ++i) {
+    expected_order[i] = i;
+  }
+  EXPECT_EQ(acquired_order, expected_order);
 }
 
 }  // namespace

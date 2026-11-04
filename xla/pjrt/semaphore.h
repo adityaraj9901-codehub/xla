@@ -71,12 +71,16 @@ class Semaphore {
   struct CanAcquireArgs {
     Semaphore* semaphore;
     int64_t amount;
+    CanAcquireArgs* prev = nullptr;
+    CanAcquireArgs* next = nullptr;
   };
   static bool CanAcquire(CanAcquireArgs* args)
       ABSL_EXCLUSIVE_LOCKS_REQUIRED(args->semaphore->mu_);
 
   mutable absl::Mutex mu_;
   int64_t value_ ABSL_GUARDED_BY(mu_);
+  CanAcquireArgs* head_ ABSL_GUARDED_BY(mu_) = nullptr;
+  CanAcquireArgs* tail_ ABSL_GUARDED_BY(mu_) = nullptr;
   const int64_t max_capacity_;
 };
 

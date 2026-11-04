@@ -30,17 +30,44 @@ Semaphore::Semaphore(int64_t capacity)
 }
 
 bool Semaphore::CanAcquire(CanAcquireArgs* args) {
-  return args->semaphore->value_ >= args->amount;
+  if (args->semaphore->value_ < args->amount) {
+    return false;
+  }
+  for (CanAcquireArgs* w = args->semaphore->head_; w != args; w = w->next) {
+    if (w->amount <= args->semaphore->value_) {
+      return false;
+    }
+  }
+  return true;
 }
 
 void Semaphore::Acquire(int64_t amount) {
   CHECK_GE(amount, 0);
 
+  mu_.lock();
   CanAcquireArgs args;
   args.semaphore = this;
   args.amount = amount;
+  args.prev = tail_;
+  if (tail_ != nullptr) {
+    tail_->next = &args;
+  } else {
+    head_ = &args;
+  }
+  tail_ = &args;
 
-  mu_.LockWhen(absl::Condition(&CanAcquire, &args));
+  mu_.Await(absl::Condition(&CanAcquire, &args));
+
+  if (args.prev != nullptr) {
+    args.prev->next = args.next;
+  } else {
+    head_ = args.next;
+  }
+  if (args.next != nullptr) {
+    args.next->prev = args.prev;
+  } else {
+    tail_ = args.prev;
+  }
   value_ -= amount;
   mu_.unlock();
 }
